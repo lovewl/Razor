@@ -11,6 +11,8 @@ namespace Microsoft.VisualStudio.Editor.Razor
     {
         public abstract event EventHandler<DocumentStructureChangedEventArgs> DocumentStructureChanged;
 
+        public abstract RazorTemplateEngine TemplateEngine { get; }
+
         public abstract string FilePath { get; }
 
         public abstract RazorCodeDocument CodeDocument { get; }

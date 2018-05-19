@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Razor.Language;
@@ -33,6 +34,7 @@ namespace Microsoft.VisualStudio.Editor.Razor
         private readonly VisualStudioCompletionBroker _completionBroker;
         private readonly VisualStudioDocumentTracker _documentTracker;
         private readonly ForegroundDispatcher _dispatcher;
+        private RazorTemplateEngine _templateEngine;
         private readonly ProjectSnapshotProjectEngineFactory _projectEngineFactory;
         private readonly ErrorReporter _errorReporter;
         private RazorProjectEngine _projectEngine;
@@ -88,6 +90,8 @@ namespace Microsoft.VisualStudio.Editor.Razor
         }
 
         public override string FilePath => _documentTracker.FilePath;
+
+        public override RazorTemplateEngine TemplateEngine => _templateEngine;
 
         public override RazorCodeDocument CodeDocument => _codeDocument;
 
@@ -175,6 +179,9 @@ namespace Microsoft.VisualStudio.Editor.Razor
             Debug.Assert(_documentTracker.ProjectSnapshot != null);
 
             _projectEngine = _projectEngineFactory.Create(_documentTracker.ProjectSnapshot, ConfigureProjectEngine);
+
+            // This is still exposed and used by WTE in 15.7
+            _templateEngine = new DelegatingTemplateEngine(_projectEngine);
 
             Debug.Assert(_projectEngine != null); 
             Debug.Assert(_projectEngine.Engine != null);
@@ -434,6 +441,36 @@ namespace Microsoft.VisualStudio.Editor.Razor
             public IReadOnlyList<TagHelperDescriptor> GetDescriptors()
             {
                 return _tagHelpers;
+            }
+        }
+
+        internal class DelegatingTemplateEngine : RazorTemplateEngine
+        {
+            private readonly RazorProjectEngine _inner;
+
+            public DelegatingTemplateEngine(RazorProjectEngine inner)
+                : base(inner.Engine, inner.FileSystem)
+            {
+                if (inner == null)
+                {
+                    throw new ArgumentNullException(nameof(inner));
+                }
+
+                _inner = inner;
+            }
+
+            public override IEnumerable<RazorProjectItem> GetImportItems(RazorProjectItem projectItem)
+            {
+                var feature = _inner.ProjectFeatures.OfType<IImportProjectFeature>().FirstOrDefault();
+                if (feature == null)
+                {
+                    return Array.Empty<RazorProjectItem>();
+                }
+
+                var imports = feature.GetImports(projectItem);
+                var physicalImports = imports.Where(import => import.FilePath != null);
+
+                return physicalImports;
             }
         }
     }
