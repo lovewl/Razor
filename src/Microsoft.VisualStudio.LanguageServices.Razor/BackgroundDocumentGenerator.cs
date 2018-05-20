@@ -44,7 +44,7 @@ namespace Microsoft.CodeAnalysis.Razor
             {
                 throw new ArgumentNullException(nameof(workspaceProjectContextFactory));
             }
-            
+
             _foregroundDispatcher = foregroundDispatcher;
             _workspaceProjectContextFactory = workspaceProjectContextFactory;
             _work = new Dictionary<DocumentKey, DocumentSnapshot>();
@@ -232,11 +232,12 @@ namespace Microsoft.CodeAnalysis.Razor
                 var key = work[i].Key;
                 var document = work[i].Value;
 
-                if (document.TryGetGeneratedOutput(out var output) &&
+                if (document.TryGetText(out var source) &&
+                    document.TryGetGeneratedOutput(out var output) &&
                     _projects.TryGetValue(key.ProjectFilePath, out var projectEntry) &&
                     projectEntry.Documents.TryGetValue(key.DocumentFilePath, out var documentEntry))
                 {
-                    documentEntry.TextContainer.SetText(SourceText.From(output.GetCSharpDocument().GeneratedCode));
+                    documentEntry.SetOutput(source, output);
                 }
             }
         }
@@ -321,7 +322,7 @@ namespace Microsoft.CodeAnalysis.Razor
                             var project = _projectManager.GetLoadedProject(e.ProjectFilePath);
                             Enqueue(project, project.GetDocument(e.DocumentFilePath));
                         }
-                        
+
                         break;
                     }
 
@@ -333,7 +334,7 @@ namespace Microsoft.CodeAnalysis.Razor
                         break;
                     }
 
-                
+
                 case ProjectChangeKind.DocumentRemoved:
                     {
                         if (_projects.TryGetValue(e.ProjectFilePath, out var projectEntry) &&
@@ -409,7 +410,19 @@ namespace Microsoft.CodeAnalysis.Razor
 
             public string FilePath { get; }
 
+            public SourceText Source { get; set; }
+
+            public RazorCSharpDocument Output { get; set; }
+
             public GeneratedCodeTextContainer TextContainer { get; }
+
+            public void SetOutput(SourceText source, RazorCodeDocument codeDocument)
+            {
+                Source = source;
+                Output = codeDocument.GetCSharpDocument();
+
+                TextContainer.SetText(SourceText.From(Output.GeneratedCode));
+            }
 
             public TService GetService<TService>()
             {
@@ -422,11 +435,36 @@ namespace Microsoft.CodeAnalysis.Razor
             }
 
             public Task<ImmutableArray<SpanMapResult>> MapSpansAsync(
-                Document document, 
-                IEnumerable<TextSpan> spans, 
+                Document document,
+                IEnumerable<TextSpan> spans,
                 CancellationToken cancellationToken)
             {
-                throw new NotImplementedException();
+                if (Output == null)
+                {
+                    return Task.FromResult(ImmutableArray<SpanMapResult>.Empty);
+                }
+
+                var results = ImmutableArray.CreateBuilder<SpanMapResult>();
+                foreach (var span in spans)
+                {
+                    for (var i = 0; i < Output.SourceMappings.Count; i++)
+                    {
+                        var original = Output.SourceMappings[i].OriginalSpan.AsTextSpan();
+                        var generated = Output.SourceMappings[i].GeneratedSpan.AsTextSpan();
+
+                        var leftOffset = span.Start - generated.Start;
+                        var rightOffset = span.End - generated.End;
+                        if (leftOffset >= 0 && rightOffset <= 0)
+                        {
+                            // This span mapping contains the span.
+                            var adjusted = new TextSpan(original.Start + leftOffset, (original.End + rightOffset) - (original.Start + leftOffset));
+                            results.Add(new SpanMapResult(document, Source.Lines.GetLinePositionSpan(adjusted)));
+                            break;
+                        }
+                    }
+                }
+
+                return Task.FromResult(results.ToImmutable());
             }
         }
 
@@ -435,7 +473,7 @@ namespace Microsoft.CodeAnalysis.Razor
             public override event EventHandler<TextChangeEventArgs> TextChanged;
 
             private SourceText _currentText;
-            
+
             public GeneratedCodeTextContainer()
                 : this(SourceText.From(string.Empty))
             {
@@ -459,7 +497,7 @@ namespace Microsoft.CodeAnalysis.Razor
                 {
                     throw new ArgumentNullException(nameof(sourceText));
                 }
-                
+
                 var e = new TextChangeEventArgs(_currentText, sourceText);
                 _currentText = sourceText;
 
